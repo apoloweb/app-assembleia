@@ -104,6 +104,29 @@ create table if not exists public.solicitacoes (
 );
 
 create index if not exists assinaturas_abaixo_data on public.assinaturas (abaixo_id, criado_em desc);
+
+-- Como cada assinatura foi confirmada e as provas guardadas com ela.
+--   metodo        'senha' (CPF e senha da conta) ou 'biometria' (biometria do aparelho)
+--   aparelho      navegador e sistema informados pelo aparelho
+--   texto_hash    resumo SHA-256 do título e do texto no momento da assinatura
+--   declaracao    o que foi assinado com a biometria (documento, CPF, conta, data), em texto
+--   credencial_id, chave_publica e prova: dados para conferir a assinatura biométrica depois
+alter table public.assinaturas
+  add column if not exists metodo        text not null default 'senha',
+  add column if not exists aparelho      text,
+  add column if not exists texto_hash    text,
+  add column if not exists declaracao    text,
+  add column if not exists credencial_id text,
+  add column if not exists chave_publica text,
+  add column if not exists prova         jsonb;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'assinaturas_metodo_check') then
+    alter table public.assinaturas
+      add constraint assinaturas_metodo_check check (metodo in ('senha', 'biometria'));
+  end if;
+end $$;
 create index if not exists solicitacoes_user_data on public.solicitacoes (user_id, criado_em desc);
 
 alter table public.clientes         enable row level security;
@@ -195,7 +218,7 @@ begin
           'meta', a.meta, 'prazo', a.prazo,
           'aberto', a.aberto and a.prazo >= (now() at time zone 'America/Sao_Paulo')::date,
           'total', (select count(*) from public.assinaturas s where s.abaixo_id = a.id),
-          'minha', (select jsonb_build_object('protocolo', s.protocolo, 'data', s.criado_em)
+          'minha', (select jsonb_build_object('protocolo', s.protocolo, 'data', s.criado_em, 'metodo', s.metodo)
                     from public.assinaturas s where s.abaixo_id = a.id and s.user_id = (select auth.uid())),
           'ultimas', coalesce((
             select jsonb_agg(jsonb_build_object('nome', public.nome_curto(u.nome), 'data', u.criado_em) order by u.criado_em desc)
@@ -207,7 +230,17 @@ begin
 end;
 $$;
 
--- Assina. Uma assinatura por conta e por CPF em cada abaixo-assinado.
+-- Resumo (SHA-256, em hexadecimal) do título e do texto de um abaixo-assinado.
+create or replace function public.abaixo_texto_hash(p_titulo text, p_texto text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select encode(sha256(convert_to(coalesce(p_titulo, '') || E'\n' || coalesce(p_texto, ''), 'UTF8')), 'hex');
+$$;
+
+-- Assina com CPF e senha. Uma assinatura por conta e por CPF em cada abaixo-assinado.
 create or replace function public.assinar(p_id uuid, p_cpf text)
 returns jsonb
 language plpgsql
@@ -221,6 +254,7 @@ declare
   v_a    public.abaixo_assinados%rowtype;
   v_prot text;
   v_ip   text;
+  v_ag   text;
   v_em   timestamptz;
 begin
   if not public.acesso_confirmado() then
@@ -249,17 +283,19 @@ begin
 
   begin
     v_ip := split_part(current_setting('request.headers', true)::json ->> 'x-forwarded-for', ',', 1);
+    v_ag := left(current_setting('request.headers', true)::json ->> 'user-agent', 300);
   exception when others then
     v_ip := null;
   end;
   v_prot := 'ADM-' || to_char(now() at time zone 'America/Sao_Paulo', 'YYYY') || '-' ||
             upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8));
 
-  insert into public.assinaturas (abaixo_id, user_id, nome, cpf, protocolo, ip)
-  values (p_id, v_user, v_nome, v_cpf, v_prot, nullif(trim(v_ip), ''))
+  insert into public.assinaturas (abaixo_id, user_id, nome, cpf, protocolo, ip, metodo, aparelho, texto_hash)
+  values (p_id, v_user, v_nome, v_cpf, v_prot, nullif(trim(v_ip), ''), 'senha', nullif(trim(v_ag), ''),
+          public.abaixo_texto_hash(v_a.titulo, v_a.texto))
   returning criado_em into v_em;
 
-  return jsonb_build_object('protocolo', v_prot, 'data', v_em);
+  return jsonb_build_object('protocolo', v_prot, 'data', v_em, 'metodo', 'senha');
 end;
 $$;
 
@@ -501,26 +537,41 @@ grant execute on function public.admin_painel() to authenticated;
 
 -- =====================================================================
 -- 11) VÍDEOS INICIAIS
---     Mensagens do Bispo Samuel Ferreira (AD Brás, programa Palavra de Vida), pelo YouTube.
---     Só entram se a tabela de vídeos estiver vazia. Depois, publique e exclua pela tela Administrar.
+--     Mensagens do Bispo Samuel Ferreira e músicas cristãs, pelo player do YouTube.
+--     Todos conferidos em 15/11/2026: públicos e com exibição fora do YouTube permitida.
+--     Cada vídeo só entra se o endereço ainda não estiver na tabela.
+--     Os vídeos do programa Palavra de Vida que entraram na primeira versão foram
+--     tornados privados no YouTube e são retirados aqui.
 -- =====================================================================
 
+delete from public.videos
+where url in (
+  'https://www.youtube.com/watch?v=AJu97sk9yNk', 'https://www.youtube.com/watch?v=Ytq2SPpjU4w',
+  'https://www.youtube.com/watch?v=6-2eGj0iJbQ', 'https://www.youtube.com/watch?v=gGVoWxRxehk',
+  'https://www.youtube.com/watch?v=Vv47Lwc99uQ', 'https://www.youtube.com/watch?v=qmJfN653BeE',
+  'https://www.youtube.com/watch?v=tBmtdRNZMEU', 'https://www.youtube.com/watch?v=iBa4tDVJId8',
+  'https://www.youtube.com/watch?v=dG6L5RlR3SY', 'https://www.youtube.com/watch?v=YpmRyN5rt0A'
+);
+
 insert into public.videos (titulo, descricao, categoria, origem, url, criado_em)
-select v.titulo, 'Mensagem do Bispo Samuel Ferreira na AD Brás, programa Palavra de Vida.', 'Palavra de Vida', 'link',
+select v.titulo, v.descricao, v.categoria, 'link',
        'https://www.youtube.com/watch?v=' || v.codigo, now() - (v.ordem * interval '1 minute')
 from (values
-  (1,  'Encare o Seu Problema',             'AJu97sk9yNk'),
-  (2,  'Você Tem Uma Rocha - Parte 1',      'Ytq2SPpjU4w'),
-  (3,  'Você Tem Uma Rocha - Parte 2',      '6-2eGj0iJbQ'),
-  (4,  'A Presença de Deus',                'gGVoWxRxehk'),
-  (5,  'A Mensagem da Salvação',            'Vv47Lwc99uQ'),
-  (6,  'Acerca da Diversidade dos Dons',    'qmJfN653BeE'),
-  (7,  'Somos Flechas!',                    'tBmtdRNZMEU'),
-  (8,  'Construindo o Altar - Parte 1',     'iBa4tDVJId8'),
-  (9,  'Onde você colocou Jesus?',          'dG6L5RlR3SY'),
-  (10, 'Quando Deus garante a sua justiça', 'YpmRyN5rt0A')
-) as v(ordem, titulo, codigo)
-where not exists (select 1 from public.videos);
+  (1,  'Que darei eu ao Senhor?',                        'Mensagem do Bispo Samuel Ferreira. Canal AD Brás Itapevi.',        'Mensagens', 'pkP_qKK-WWY'),
+  (2,  'Ministração na CIBEN 2022',                      'Ministração do Bispo Samuel Ferreira. Canal TV AD Brás Alagoas.',  'Mensagens', 'sq97YEEkdiY'),
+  (3,  'Cassiane - Hino da Vitória',                     'Clipe oficial. Canal MK Music.',                                  'Músicas',   'cWA81k-7kp0'),
+  (4,  'Cassiane - Com Muito Louvor (Ao Vivo)',          'Canal oficial da Cassiane.',                                      'Músicas',   '440SucDfC2Y'),
+  (5,  'Aline Barros - Ressuscita-me',                   'Clipe oficial. Canal MK Music.',                                  'Músicas',   'dc6oADkbQSw'),
+  (6,  'Aline Barros - Jeová Jireh',                     'Clipe oficial. Canal oficial da Aline Barros.',                   'Músicas',   'YyFd_dXy494'),
+  (7,  'Gabriela Rocha - Me Atraiu (Ao Vivo)',           'Canal oficial da Gabriela Rocha.',                                'Músicas',   'Z6cONvRUFZQ'),
+  (8,  'Fernandinho - Uma Nova História',                'Clipe oficial. Canal oficial do Fernandinho.',                    'Músicas',   'SdkWBHLHTgg'),
+  (9,  'Anderson Freire - Raridade',                     'Vídeo com letra. Canal oficial do Anderson Freire.',              'Músicas',   'WdYO0JtOm0A'),
+  (10, 'Bruna Karla - Oh Quão Lindo Esse Nome É',        'Clipe oficial. Canal oficial da Bruna Karla.',                    'Músicas',   'syT__AJIm7E'),
+  (11, 'Shirley Carvalhaes - Vendavais (Ao Vivo)',       'Canal Art Music.',                                                'Músicas',   'p5ud6iDG2kc')
+) as v(ordem, titulo, descricao, categoria, codigo)
+where not exists (
+  select 1 from public.videos x where x.url = 'https://www.youtube.com/watch?v=' || v.codigo
+);
 
 -- =====================================================================
 -- 12) TORNAR UMA CONTA ADMINISTRADORA
@@ -530,3 +581,311 @@ where not exists (select 1 from public.videos);
 -- insert into public.administradores (user_id)
 -- select id from auth.users where email = 'seu-email@exemplo.com.br'
 -- on conflict do nothing;
+
+-- =====================================================================
+-- 13) ASSINATURA COM A BIOMETRIA DO APARELHO
+--     A pessoa confirma a assinatura com a digital ou o rosto do próprio aparelho (padrão WebAuthn).
+--     A biometria nunca sai do aparelho: o que chega aqui é uma chave pública, cadastrada uma vez
+--     por aparelho, e a cada assinatura uma confirmação criptográfica ligada ao texto assinado.
+--     Quem confere a confirmação é a função de servidor "assinatura-biometrica"; as operações
+--     abaixo só respondem a ela (papel service_role), nunca ao navegador.
+-- =====================================================================
+
+create table if not exists public.biometria_credenciais (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  credencial_id text not null unique,
+  chave_publica text not null,
+  contador      bigint not null default 0,
+  transportes   text[] not null default '{}',
+  aparelho      text,
+  criado_em     timestamptz not null default now(),
+  usado_em      timestamptz
+);
+create index if not exists biometria_credenciais_user on public.biometria_credenciais (user_id);
+
+create table if not exists public.biometria_desafios (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  tipo          text not null check (tipo in ('registro', 'assinatura')),
+  desafio       text not null,
+  abaixo_id     uuid references public.abaixo_assinados(id) on delete cascade,
+  cpf           text,
+  texto_hash    text,
+  declaracao    text,
+  credencial_id text,
+  criado_em     timestamptz not null default now(),
+  expira_em     timestamptz not null default now() + interval '5 minutes',
+  usado_em      timestamptz,
+  concluido_em  timestamptz
+);
+create index if not exists biometria_desafios_user on public.biometria_desafios (user_id, criado_em desc);
+
+alter table public.biometria_credenciais enable row level security;
+alter table public.biometria_desafios    enable row level security;
+revoke all on public.biometria_credenciais, public.biometria_desafios from anon, authenticated;
+
+-- Conta com e-mail confirmado e cadastro feito (mesma regra do app, para uso pela função de servidor).
+create or replace function public.bio_conta_ok(p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from auth.users u where u.id = p_user and u.email_confirmed_at is not null)
+     and exists (select 1 from public.clientes c where c.user_id = p_user);
+$$;
+
+-- Confere se a pessoa pode assinar aquele abaixo-assinado com aquele CPF. Devolve o texto do erro ou null.
+create or replace function public.bio_pode_assinar(p_user uuid, p_abaixo uuid, p_cpf text)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_a public.abaixo_assinados%rowtype;
+begin
+  if not public.bio_conta_ok(p_user) then
+    return 'Complete o seu cadastro antes de assinar';
+  end if;
+  if not public.cpf_valido(p_cpf) then
+    return 'CPF inválido';
+  end if;
+  select * into v_a from public.abaixo_assinados where id = p_abaixo;
+  if v_a.id is null then
+    return 'Abaixo-assinado não encontrado';
+  end if;
+  if not v_a.aberto or v_a.prazo < (now() at time zone 'America/Sao_Paulo')::date then
+    return 'Este abaixo-assinado está encerrado';
+  end if;
+  if exists (select 1 from public.assinaturas where abaixo_id = p_abaixo and user_id = p_user) then
+    return 'Você já assinou este abaixo-assinado';
+  end if;
+  if exists (select 1 from public.assinaturas where abaixo_id = p_abaixo and cpf = p_cpf) then
+    return 'Este CPF já assinou este abaixo-assinado';
+  end if;
+  return null;
+end;
+$$;
+
+-- Cadastro da biometria do aparelho, passo 1: guarda o desafio gerado pela função de servidor.
+create or replace function public.bio_registro_iniciar(p_user uuid, p_desafio text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id   uuid;
+  v_nome text;
+  v_mail text;
+begin
+  if not public.bio_conta_ok(p_user) then
+    return jsonb_build_object('erro', 'Complete o seu cadastro antes de assinar');
+  end if;
+  if coalesce(length(p_desafio), 0) < 20 then
+    return jsonb_build_object('erro', 'Pedido inválido');
+  end if;
+  delete from public.biometria_desafios where criado_em < now() - interval '1 day';
+  if (select count(*) from public.biometria_desafios
+      where user_id = p_user and criado_em > now() - interval '10 minutes') >= 30 then
+    return jsonb_build_object('erro', 'Muitas tentativas em pouco tempo. Espere alguns minutos e tente de novo.');
+  end if;
+  select nome into v_nome from public.clientes where user_id = p_user;
+  select email into v_mail from auth.users where id = p_user;
+  insert into public.biometria_desafios (user_id, tipo, desafio) values (p_user, 'registro', p_desafio)
+  returning id into v_id;
+  return jsonb_build_object(
+    'desafio_id', v_id, 'nome', v_nome, 'email', v_mail,
+    'credenciais', coalesce((select jsonb_agg(jsonb_build_object('id', c.credencial_id, 'transportes', c.transportes))
+                             from public.biometria_credenciais c where c.user_id = p_user), '[]'::jsonb));
+end;
+$$;
+
+-- Usa um desafio uma única vez e devolve o que a função de servidor precisa para conferir a resposta do aparelho.
+create or replace function public.bio_desafio_usar(p_user uuid, p_desafio_id uuid, p_tipo text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_d public.biometria_desafios%rowtype;
+  v_c public.biometria_credenciais%rowtype;
+begin
+  update public.biometria_desafios
+     set usado_em = now()
+   where id = p_desafio_id and user_id = p_user and tipo = p_tipo
+     and usado_em is null and expira_em > now()
+  returning * into v_d;
+  if v_d.id is null then
+    return jsonb_build_object('erro', 'O tempo para confirmar acabou. Comece de novo.');
+  end if;
+  if p_tipo = 'assinatura' then
+    select * into v_c from public.biometria_credenciais
+     where credencial_id = v_d.credencial_id and user_id = p_user;
+    if v_c.id is null then
+      return jsonb_build_object('erro', 'A biometria deste aparelho não está cadastrada.');
+    end if;
+  end if;
+  return jsonb_build_object(
+    'desafio', v_d.desafio, 'credencial_id', v_c.credencial_id, 'chave_publica', v_c.chave_publica,
+    'contador', v_c.contador, 'transportes', to_jsonb(coalesce(v_c.transportes, '{}'::text[])));
+end;
+$$;
+
+-- Cadastro da biometria do aparelho, passo 2: guarda a chave pública já conferida pela função de servidor.
+create or replace function public.bio_registro_concluir(
+  p_user uuid, p_desafio_id uuid, p_credencial text, p_chave text, p_contador bigint,
+  p_transportes text[], p_aparelho text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.biometria_desafios
+                 where id = p_desafio_id and user_id = p_user and tipo = 'registro'
+                   and usado_em is not null and concluido_em is null
+                   and usado_em > now() - interval '2 minutes') then
+    return jsonb_build_object('erro', 'O tempo para confirmar acabou. Comece de novo.');
+  end if;
+  if coalesce(p_credencial, '') = '' or coalesce(p_chave, '') = '' then
+    return jsonb_build_object('erro', 'Pedido inválido');
+  end if;
+  if exists (select 1 from public.biometria_credenciais where credencial_id = p_credencial and user_id <> p_user) then
+    return jsonb_build_object('erro', 'Esta biometria já está cadastrada em outra conta.');
+  end if;
+  if (select count(*) from public.biometria_credenciais where user_id = p_user) >= 10
+     and not exists (select 1 from public.biometria_credenciais where credencial_id = p_credencial) then
+    return jsonb_build_object('erro', 'Esta conta já tem o número máximo de aparelhos cadastrados.');
+  end if;
+  insert into public.biometria_credenciais (user_id, credencial_id, chave_publica, contador, transportes, aparelho)
+  values (p_user, p_credencial, p_chave, coalesce(p_contador, 0), coalesce(p_transportes, '{}'), left(p_aparelho, 300))
+  on conflict (credencial_id) do update
+    set chave_publica = excluded.chave_publica, contador = excluded.contador,
+        transportes = excluded.transportes, aparelho = excluded.aparelho;
+  update public.biometria_desafios set concluido_em = now() where id = p_desafio_id;
+  return jsonb_build_object('ok', true, 'credencial_id', p_credencial);
+end;
+$$;
+
+-- Assinatura com biometria, passo 1: confere se a pessoa pode assinar, monta a declaração que será
+-- assinada e o desafio, que é o resumo SHA-256 dessa declaração (assim a confirmação do aparelho
+-- fica presa ao documento, ao CPF, à conta e ao momento).
+create or replace function public.bio_assinatura_iniciar(p_user uuid, p_abaixo uuid, p_cpf text, p_credencial text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_cpf  text := regexp_replace(coalesce(p_cpf, ''), '[^0-9]', '', 'g');
+  v_erro text;
+  v_a    public.abaixo_assinados%rowtype;
+  v_c    public.biometria_credenciais%rowtype;
+  v_nome text;
+  v_hash text;
+  v_decl text;
+  v_des  text;
+  v_id   uuid;
+begin
+  v_erro := public.bio_pode_assinar(p_user, p_abaixo, v_cpf);
+  if v_erro is not null then
+    return jsonb_build_object('erro', v_erro);
+  end if;
+  select * into v_c from public.biometria_credenciais where credencial_id = p_credencial and user_id = p_user;
+  if v_c.id is null then
+    return jsonb_build_object('erro', 'A biometria deste aparelho não está cadastrada.', 'sem_credencial', true);
+  end if;
+  if (select count(*) from public.biometria_desafios
+      where user_id = p_user and criado_em > now() - interval '10 minutes') >= 30 then
+    return jsonb_build_object('erro', 'Muitas tentativas em pouco tempo. Espere alguns minutos e tente de novo.');
+  end if;
+  select * into v_a from public.abaixo_assinados where id = p_abaixo;
+  select nome into v_nome from public.clientes where user_id = p_user;
+  v_hash := public.abaixo_texto_hash(v_a.titulo, v_a.texto);
+  v_decl := jsonb_build_object(
+    'ato', 'assinatura de abaixo-assinado',
+    'abaixo_id', p_abaixo, 'titulo', v_a.titulo, 'texto_sha256', v_hash,
+    'assinante', v_nome, 'cpf', v_cpf, 'conta', p_user, 'credencial', p_credencial,
+    'emitido_em', to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+    'nonce', replace(gen_random_uuid()::text, '-', ''))::text;
+  v_des := rtrim(translate(encode(sha256(convert_to(v_decl, 'UTF8')), 'base64'), '+/', '-_'), '=');
+  insert into public.biometria_desafios (user_id, tipo, desafio, abaixo_id, cpf, texto_hash, declaracao, credencial_id)
+  values (p_user, 'assinatura', v_des, p_abaixo, v_cpf, v_hash, v_decl, p_credencial)
+  returning id into v_id;
+  return jsonb_build_object('desafio_id', v_id, 'desafio', v_des, 'declaracao', v_decl,
+                            'transportes', to_jsonb(v_c.transportes));
+end;
+$$;
+
+-- Assinatura com biometria, passo 2: grava a assinatura depois que a função de servidor conferiu a confirmação do aparelho.
+create or replace function public.bio_assinatura_concluir(
+  p_user uuid, p_desafio_id uuid, p_contador bigint, p_ip text, p_aparelho text, p_prova jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_d    public.biometria_desafios%rowtype;
+  v_c    public.biometria_credenciais%rowtype;
+  v_erro text;
+  v_nome text;
+  v_prot text;
+  v_em   timestamptz;
+begin
+  select * into v_d from public.biometria_desafios
+   where id = p_desafio_id and user_id = p_user and tipo = 'assinatura'
+     and usado_em is not null and concluido_em is null
+     and usado_em > now() - interval '2 minutes'
+   for update;
+  if v_d.id is null then
+    return jsonb_build_object('erro', 'O tempo para confirmar acabou. Comece de novo.');
+  end if;
+  select * into v_c from public.biometria_credenciais where credencial_id = v_d.credencial_id and user_id = p_user;
+  if v_c.id is null then
+    return jsonb_build_object('erro', 'A biometria deste aparelho não está cadastrada.');
+  end if;
+  v_erro := public.bio_pode_assinar(p_user, v_d.abaixo_id, v_d.cpf);
+  if v_erro is not null then
+    return jsonb_build_object('erro', v_erro);
+  end if;
+  if v_d.texto_hash is distinct from (select public.abaixo_texto_hash(a.titulo, a.texto)
+                                      from public.abaixo_assinados a where a.id = v_d.abaixo_id) then
+    return jsonb_build_object('erro', 'O texto do abaixo-assinado mudou. Leia de novo e assine outra vez.');
+  end if;
+  select nome into v_nome from public.clientes where user_id = p_user;
+  v_prot := 'ADM-' || to_char(now() at time zone 'America/Sao_Paulo', 'YYYY') || '-' ||
+            upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8));
+  insert into public.assinaturas (abaixo_id, user_id, nome, cpf, protocolo, ip, metodo, aparelho,
+                                  texto_hash, declaracao, credencial_id, chave_publica, prova)
+  values (v_d.abaixo_id, p_user, v_nome, v_d.cpf, v_prot, nullif(trim(split_part(coalesce(p_ip, ''), ',', 1)), ''),
+          'biometria', nullif(left(trim(coalesce(p_aparelho, '')), 300), ''),
+          v_d.texto_hash, v_d.declaracao, v_c.credencial_id, v_c.chave_publica, p_prova)
+  returning criado_em into v_em;
+  update public.biometria_credenciais set contador = greatest(contador, coalesce(p_contador, 0)), usado_em = now()
+   where id = v_c.id;
+  update public.biometria_desafios set concluido_em = now() where id = v_d.id;
+  return jsonb_build_object('protocolo', v_prot, 'data', v_em, 'metodo', 'biometria');
+end;
+$$;
+
+-- Só a função de servidor (service_role) chama estas operações.
+revoke all on function public.bio_conta_ok(uuid)                                              from public, anon, authenticated;
+revoke all on function public.bio_pode_assinar(uuid, uuid, text)                              from public, anon, authenticated;
+revoke all on function public.bio_registro_iniciar(uuid, text)                                from public, anon, authenticated;
+revoke all on function public.bio_desafio_usar(uuid, uuid, text)                              from public, anon, authenticated;
+revoke all on function public.bio_registro_concluir(uuid, uuid, text, text, bigint, text[], text) from public, anon, authenticated;
+revoke all on function public.bio_assinatura_iniciar(uuid, uuid, text, text)                  from public, anon, authenticated;
+revoke all on function public.bio_assinatura_concluir(uuid, uuid, bigint, text, text, jsonb)  from public, anon, authenticated;
+grant execute on function public.bio_registro_iniciar(uuid, text)                                 to service_role;
+grant execute on function public.bio_desafio_usar(uuid, uuid, text)                               to service_role;
+grant execute on function public.bio_registro_concluir(uuid, uuid, text, text, bigint, text[], text) to service_role;
+grant execute on function public.bio_assinatura_iniciar(uuid, uuid, text, text)                   to service_role;
+grant execute on function public.bio_assinatura_concluir(uuid, uuid, bigint, text, text, jsonb)   to service_role;
+grant execute on function public.abaixo_texto_hash(text, text) to authenticated, service_role;

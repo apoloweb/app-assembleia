@@ -11,6 +11,7 @@ Base: área do cliente do repositório `apoloweb/celeiro` (pasta `cliente/`, ver
 | `index.html` | O aplicativo (telas, estilo e comportamento) |
 | `config.js` | Endereço e chave pública do banco do app e do Office que recebe as solicitações |
 | `supabase.sql` | Tabelas, regras de acesso e vídeos iniciais, para rodar no Supabase do app |
+| `supabase/functions/assinatura-biometrica/index.ts` | Função de servidor que confere a assinatura feita com a biometria do aparelho |
 | `termos.html` | Termos de Uso e Política de Privacidade (minuta, em revisão) |
 | `marcas/ad-madureira/` | Logo original, símbolo sem o nome, ícone |
 
@@ -52,6 +53,25 @@ Em **Perfil > Administrar o aplicativo** ficam: Vídeos, Abaixo-assinados, Módu
 - **Saída automática** depois de 30 minutos sem uso.
 - O app leva só chaves públicas. A chave `service_role` / `secret` nunca entra neste repositório.
 
+## Assinatura de abaixo-assinados com a biometria do aparelho
+
+Quem assina confirma com a digital ou o rosto do próprio aparelho (padrão WebAuthn), no lugar da senha.
+
+- **A biometria não sai do aparelho.** O app recebe só uma chave pública, cadastrada uma vez por aparelho, e a cada assinatura uma confirmação criptográfica.
+- **A confirmação fica presa ao documento.** O aparelho assina o resumo de uma declaração com o abaixo-assinado, o resumo do texto, o CPF, a conta e a data. Mudou o texto, a confirmação não vale.
+- **O que fica guardado em cada assinatura:** nome, CPF, data e hora, IP, aparelho, forma de confirmação, resumo do texto, a declaração assinada, a chave pública e a confirmação do aparelho (para conferência posterior).
+- **Sem biometria no aparelho, ou com a função fora do ar,** a assinatura é confirmada com a senha, como antes, e fica marcada como "Senha da conta".
+- **O que ela prova:** que quem assinou destravou aquele aparelho, logado naquela conta, naquele momento. Não confere o rosto com nenhum cadastro oficial.
+- A chave vale para o endereço em que foi criada. Se o app mudar de domínio, cada pessoa cadastra o aparelho de novo na assinatura seguinte.
+
+Para ligar:
+
+1. Rodar o `supabase.sql` de novo (a seção 13 cria o que falta).
+2. Edge Functions > Deploy a new function > nome `assinatura-biometrica` > colar o conteúdo de `supabase/functions/assinatura-biometrica/index.ts`. Como nas funções do Office, ela mesma confere quem está chamando.
+3. Se o app for publicado em outro endereço, criar o segredo `APP_ORIGENS` com os endereços aceitos, separados por vírgula.
+
+Enquanto a função não estiver publicada, o app usa a senha.
+
 ## Envio ao Office da Celeiro
 
 Cada cadastro novo (lead) e cada solicitação (veicular, energia, conta digital) é gravado no banco do app **e** copiado para o Office da Celeiro (`officeUrl` no `config.js`), com `app: "AD Madureira"` e, enquanto `teste: true`, marcado como teste. Para desligar a cópia, deixe `officeUrl` vazio.
@@ -73,6 +93,7 @@ Marca atual: índigo `#33327A` (institucional), amarelo `#FCBC19` (destaque), az
 1. Imagens e vídeos da primeira tela interna: serão enviados pelo Paulo.
 2. Texto institucional da igreja (tela "Quem somos").
 3. Devocional e Bíblia online: ainda não construídos.
+3a. Assinatura com biometria: testada com um aparelho simulado; falta o teste em celulares de verdade (Android e iPhone). Etapas seguintes possíveis: relatório final do abaixo-assinado assinado com o certificado ICP-Brasil da empresa e biometria facial conferida com base oficial.
 4. Visitante sem conta: hoje é preciso criar conta para ver qualquer conteúdo (a primeira versão, só de protótipo, deixava explorar sem cadastro).
 5. Termos de Uso e Política de Privacidade: minuta adaptada da Celeiro. Falta definir quem responde pelos dados (igreja, Celeiro ou as duas), preencher o bloco `EMPRESA` no fim do `termos.html` e passar por revisão jurídica. O cadastro em um app de igreja pode indicar religião, que a LGPD trata como dado sensível.
 6. Textos dos serviços (veicular, energia, conta digital) ainda citam a equipe da Celeiro, que é quem atende.
