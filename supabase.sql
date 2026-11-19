@@ -1,4 +1,4 @@
--- App Universal · banco de dados do aplicativo (marca atual: AD Ministério Madureira)
+-- App Assembleia · banco de dados do aplicativo (marca atual: AD Ministério Madureira)
 -- Contas, vídeos, abaixo-assinados, assinaturas, solicitações de serviço, módulos e administração.
 --
 -- Rode este arquivo inteiro em: painel do Supabase > SQL Editor > New query > Run.

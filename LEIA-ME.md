@@ -1,6 +1,6 @@
-# App Universal (white label)
+# App Assembleia (white label)
 
-Endereço publicado: https://assembleia.celeiroadministradora.com.br (o endereço anterior, `universal.celeiroadministradora.com.br`, continua aceito). Projeto no Supabase: `app-assembleia`.
+Endereço publicado: https://assembleia.celeiroadministradora.com.br. Projeto no Supabase: `app-assembleia`.
 
 Aplicativo white label com conta real e banco de dados próprio. Primeira marca aplicada: **Assembleia de Deus Ministério Madureira**.
 

@@ -1,4 +1,4 @@
-// App Universal · função "assinatura-biometrica" (Supabase Edge Function)
+// App Assembleia · função "assinatura-biometrica" (Supabase Edge Function)
 //
 // Confere a assinatura de abaixo-assinados feita com a biometria do aparelho (digital ou rosto),
 // pelo padrão WebAuthn. A biometria nunca sai do aparelho: aqui chegam só uma chave pública,
@@ -11,8 +11,7 @@
 // Publicar: Edge Functions > Deploy a new function > nome "assinatura-biometrica", colar este arquivo.
 // Segredos opcionais (Edge Functions > Secrets):
 //   APP_ORIGENS   endereços do app que podem usar a função, separados por vírgula.
-//                 Padrão: https://assembleia.celeiroadministradora.com.br e o endereço anterior,
-//                 https://universal.celeiroadministradora.com.br
+//                 Padrão: https://assembleia.celeiroadministradora.com.br
 //   APP_NOME      nome que o aparelho mostra ao pedir a biometria. Padrão: AD Ministério Madureira
 
 import { withSupabase } from 'npm:@supabase/server@1'
@@ -29,7 +28,7 @@ function segredo(nome) {
   return (Deno.env.get(nome) || '').trim()
 }
 function origensAceitas() {
-  return (segredo('APP_ORIGENS') || 'https://assembleia.celeiroadministradora.com.br,https://universal.celeiroadministradora.com.br')
+  return (segredo('APP_ORIGENS') || 'https://assembleia.celeiroadministradora.com.br')
     .split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean)
 }
 
