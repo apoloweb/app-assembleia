@@ -1,5 +1,7 @@
 # App Universal (white label)
 
+Endereço publicado: https://assembleia.celeiroadministradora.com.br (o endereço anterior, `universal.celeiroadministradora.com.br`, continua aceito). Projeto no Supabase: `app-assembleia`.
+
 Aplicativo white label com conta real e banco de dados próprio. Primeira marca aplicada: **Assembleia de Deus Ministério Madureira**.
 
 Base: área do cliente do repositório `apoloweb/celeiro` (pasta `cliente/`, versão de 13/11/2026), que é a versão do app da Celeiro com banco de dados. No celular aparecem as abas embaixo; no computador, as mesmas abas viram o menu do topo.
@@ -71,6 +73,17 @@ Para ligar:
 3. Se o app for publicado em outro endereço, criar o segredo `APP_ORIGENS` com os endereços aceitos, separados por vírgula.
 
 Enquanto a função não estiver publicada, o app usa a senha.
+
+## Relatório do abaixo-assinado
+
+Em Perfil > Administrar o aplicativo > Abaixo-assinados, abrindo um abaixo-assinado, o botão **Baixar relatório (PDF)** gera dois arquivos:
+
+- **O relatório em PDF:** documento, texto integral, totais por forma de confirmação, explicação de como as assinaturas foram confirmadas e a lista completa (nome, CPF, protocolo, data e hora, confirmação e IP).
+- **O arquivo de evidências (JSON):** o registro completo de cada assinatura, incluindo, nas assinaturas por biometria, a declaração assinada, a chave pública e a confirmação do aparelho.
+
+O PDF traz o resumo SHA-256 do arquivo de evidências e do texto do abaixo-assinado. Assinar o PDF com o certificado ICP-Brasil da organização (em qualquer assinador de PDF) sela os dois arquivos; a assinatura pode ser conferida no VALIDAR, do ITI. O app ainda não faz essa assinatura sozinho.
+
+Os dois arquivos contêm dados pessoais (nome, CPF, IP) e devem ser guardados com cuidado. A biblioteca que monta o PDF (jsPDF, licença MIT) fica na pasta `vendor/` e só é carregada quando o administrador pede o relatório.
 
 ## Envio ao Office da Celeiro
 
